@@ -1,0 +1,4 @@
+name = Exploregon 
+description = Mobile Web Application for finding recreational activities.
+core = 7.x
+dependencies[] = mongodb

@@ -1,0 +1,236 @@
+<?php
+
+/**
+ * @file
+ * exploregon.module
+ */
+
+// load mongodb module
+module_load_include('module', 'mongodb', 'mongodb');
+
+/*
+ * This function creates the main form for the application. Drupal has a hook that takes the code from this function
+ * and builds a form with the specified configuration, using the theme and settings you have configured for the site.
+ *
+ * Implements hook_form().
+ */
+function exploregon_form($form_state) {
+  $form = array();
+  $form['exploregon_form'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('An app for sharing the beauty of Oregon!'),
+    '#size' => 'off',
+    '#prefix' => '<a href="exploregon/about">About this web app</a>
+                  &nbsp&nbsp&nbsp&nbsp&nbsp&nbsp
+                  <a href="exploregon/recent_posts">Recent Posts</a>',
+  );
+
+  $form['exploregon_form']['location'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Location'),
+    '#description' => t('Where were you? (required for posting)'),
+    '#size' => 'off',
+  );
+
+  $form['exploregon_form']['rating'] = array(
+    '#type' => 'select',
+    '#title' => t('Rating'),
+    '#description' => t('How would you rate this location?'),
+    '#options' => array(
+      '5' => t('Awesome'),
+      '4' => t('Great'),
+      '3' => t('Not bad'),
+      '2' => t('Meh'),
+      '1' => t('Terrible'),
+    ),
+    '#size' => 'off',
+  );
+
+  $form['exploregon_form']['friends'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Friends'),
+    '#description' => t('Who were you with?'),
+    '#size' => 'off',
+  );
+
+  $form['exploregon_form']['photo'] = array(
+    '#type' => 'file',
+    '#title' => t('Image'),
+    '#description' => t('Take or upload a picture! (allowed extensions: jpg, jpeg, png)'),
+    '#size' => 'off',
+    '#format' => 'full_html',
+  );
+
+  $form['exploregon_form']['submit'] = array(
+    '#type' => 'submit',
+    '#value' => 'Share the fun!',
+    '#size' => 'off',
+  );
+  
+  return $form;
+}
+
+/*
+ * Validates the data being passed by the form. The main point of this function is to upload the file to disk, checking
+ * to make sure it has the correct file format. After that, a query is called to get all the entries in the database.
+ *
+ * Implements hook_form_validate().
+ */
+function exploregon_form_validate($form, &$form_state) {
+  // only post to the database if they have included a location
+  $post = new stdClass(); // object for the database
+  $post->location = $form_state['values']['location'];
+
+  if ($post->location != '') {
+    $post->rating = $form_state['values']['rating'];
+    $post->friends = $form_state['values']['friends'];
+    $post->time = time();
+    // save picture
+    $file = file_save_upload('photo', array(
+        'file_validate_is_image' => array(),
+        'file_validate_extensions' => array('png jpg jpeg'),
+    ));
+    if ($file) {
+      if ($file = file_move($file, 'public://')) {
+        $form_state['values']['file'] = $file;
+      }
+      $post->photo = $file->uri;
+    }
+
+    drupal_set_message(t('Your post has been saved!'));
+
+    // connect to the database
+    $db = mongodb('cs362');
+    $db->collections->insert($post);
+  }
+  $form_state['redirect'] = 'exploregon/recent_posts';
+  exploregon_page_alter($page);
+}
+
+/*
+ * This is a function I wrote to query the MongoDB database for the application. It is not a Drupal hook, but it uses PHP's
+ * MongoDB extension and returns an array of database entries that can be used to output them to the page in HTML. 
+ */
+function exploregon_query() {
+  // query the database here.
+  $db = mongodb('cs362');
+  $collection = new MongoCollection($db, 'collections');
+  $query = array();
+
+  $cursor = $collection->find($query);
+  $cursor->sort(array('location' => 1));
+
+  $results = array();
+  $i = 0;
+  while ($cursor->hasNext()) {
+    $results[$i] = $cursor->getNext();
+    $results[$i++]['_id'] = $cursor->KEY();
+  }
+  // as you can see from this dpm the array's there, just gotta make it pretty.
+  return $results;
+}
+
+/*
+ * This function takes a query and outputs all of the entries in the database to HTML.
+ */
+function exploregon_page_alter(&$page) {
+  $path = current_path();
+  // I feel evil for hard coding this in, I'm sorry to anyone who's reading this!
+  // This points to the Recent Posts page with the alias exploregon/recent_posts.
+  if ($path != 'node/8') {
+    return;
+  }
+  $results = exploregon_query();
+  // for testing purposes
+  // iterate over $results to output to HTML.
+  $i = 0;
+  $friends = '';
+  $photo = '';
+  do {
+    $rating = $results[$i]['rating'];
+    switch ($rating) {
+      case 1:
+        $rating = "Terrible";
+        break;
+      case 2:
+        $rating = "Meh";
+        break;
+      case 3:
+        $rating = "Not bad";
+      case 4:
+        $rating = "Great";
+        break;
+      case 5:
+        $rating = "Awesome";
+        break;
+      default:
+        $rating = "None listed";
+    }
+    if (array_key_exists('friends', $results[$i])) {
+      $friends = $results[$i]['friends'];
+    }
+    else{
+      $friends = "None listed.";
+    }
+    if (array_key_exists('photo', $results[$i])) {
+      $photo = $results[$i]['photo'];
+      $path = base_path();
+      $stuff = array(
+        'path' => $photo,
+      );
+      $path = theme_image($stuff);
+
+      $photo = $path . "<br><br>";
+    }
+    else {
+      $photo = "None listed.<br><br>";
+    }
+    $page['content']['main']['#markup'] .= $i+1 . "." . "<br>Location: " . $results[$i]['location']
+                                        . "<br>Rating: " . $rating
+                                        . "<br>Friends: " . $friends
+                                        . "<br>Photo: " . $photo;
+    $i++;
+  } while (next($results));
+}
+
+/*
+ * This function builds the menu links and headers for the application.
+ * It's only a few pages that are created programmatically, so this part is pretty simple.
+ */
+function exploregon_menu() {
+  $items['exploregon'] = array(
+    'title' => 'Exploregon',
+    'type' => MENU_NORMAL_ITEM,
+    'description' => 'Search for nearby recreational activities!',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('exploregon_form'),
+    'access arguments' => array('access content'),
+  );
+  $items['exploregon/recent_posts'] = array(
+    'type' => MENU_NORMAL_ITEM,
+    'page callback' => 'exploregon_page_validate',
+    'page arguments' => array('exploregon_page_validate'),
+    'access arguments' => array('access content'),
+  );
+
+  return $items;
+}
+
+/* 
+ * This function is an asynchronous task that can be run by an administrator. It clears out old entries from the site.
+ * Any entries that are more than 14 days old will be deleted from the database.
+ * Implements hook_cron().
+ */
+function exploregon_cron() {
+  // query the database here. This is a function I wrote for getting all results in MongoDB's collection for Exploregon.
+  $reults = exploregon_query();
+  // iterate over $results to check the time value.
+  $i = 0;
+  while(next($results)) {
+    // if too old, delete. 1209600 is 14 days converted to seconds.
+    if (($reults[$i]['time'] - time()) >= 1209600) {
+      $collection->remove($results[$i]);
+    }
+  }
+}
+
